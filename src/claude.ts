@@ -12,7 +12,10 @@ export async function runClaude(
     let resultText = ""
     const startTime = Date.now()
 
-    const { CLAUDECODE, ...cleanEnv } = process.env
+    const sensitiveKeys = ["CLAUDECODE", "SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "SLACK_APP_TOKEN"]
+    const cleanEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !sensitiveKeys.includes(key)),
+    )
 
     console.log(`[claude] starting query, cwd=${repoPath}`)
 
@@ -23,6 +26,7 @@ export async function runClaude(
         cwd: repoPath,
         env: cleanEnv as Record<string, string>,
         permissionMode: "bypassPermissions",
+        allowedTools: ["Read", "Glob", "Grep"],
         allowDangerouslySkipPermissions: true,
       },
     })) {
