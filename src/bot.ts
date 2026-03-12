@@ -1,8 +1,80 @@
 import { App } from "@slack/bolt"
+import type { WebClient } from "@slack/web-api"
 import type { Config } from "./config"
 import { runClaude } from "./claude"
 import { markdownToSlack } from "./format"
 import { pullRepo } from "./repos"
+
+const activeThreads = new Set<string>()
+
+function threadKey(channel: string, ts: string): string {
+  return `${channel}:${ts}`
+}
+
+async function fetchThreadHistory(
+  client: WebClient,
+  channel: string,
+  threadTs: string,
+  botUserId: string,
+): Promise<string> {
+  const result = await client.conversations.replies({
+    channel,
+    ts: threadTs,
+  })
+
+  return (result.messages ?? [])
+    .slice(1)
+    .map((m) => {
+      const role = m.user === botUserId ? "assistant" : "user"
+      const text = (m.text ?? "").replace(/<@[A-Z0-9]+>/g, "").trim()
+      return `${role}: ${text}`
+    })
+    .join("\n")
+}
+
+async function handleQuestion(
+  question: string,
+  channel: string,
+  threadTs: string,
+  repoUrl: string,
+  config: Config,
+  client: WebClient,
+  botUserId: string,
+) {
+  activeThreads.add(threadKey(channel, threadTs))
+
+  const thinkingMsg = await client.chat.postMessage({
+    channel,
+    thread_ts: threadTs,
+    text: ":hourglass_flowing_sand: Thinking...",
+  })
+
+  try {
+    const history = await fetchThreadHistory(client, channel, threadTs, botUserId)
+    const prompt = history
+      ? `Previous conversation:\n${history}\n\nNew message: ${question}`
+      : question
+
+    const repoPath = await pullRepo(repoUrl, config.githubToken)
+    const answer = await runClaude(prompt, repoPath, config.timeoutMs)
+    const response = markdownToSlack(answer) || "No response from Claude."
+
+    await client.chat.update({
+      channel,
+      ts: thinkingMsg.ts!,
+      text: response,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error("Error:", message)
+
+    await client.chat.update({
+      channel,
+      ts: thinkingMsg.ts!,
+      text: `:x: Something went wrong: ${message}`,
+    })
+  }
+}
 
 export function createBot(config: Config): App {
   const app = new App({
@@ -16,7 +88,14 @@ export function createBot(config: Config): App {
     config.repos.map((r) => [r.channelId, r.repoUrl]),
   )
 
+  let botUserId = ""
+
   app.event("app_mention", async ({ event, client }) => {
+    if (!botUserId) {
+      const auth = await client.auth.test()
+      botUserId = auth.user_id as string
+    }
+
     const question = event.text.replace(/<@[A-Z0-9]+>/g, "").trim()
     console.log(`[bot] mention in ${event.channel}: "${question}"`)
 
@@ -39,32 +118,33 @@ export function createBot(config: Config): App {
       return
     }
 
-    const thinkingMsg = await client.chat.postMessage({
-      channel: event.channel,
-      thread_ts: event.ts,
-      text: ":hourglass_flowing_sand: Thinking...",
-    })
+    const threadTs = event.thread_ts ?? event.ts
+    await handleQuestion(question, event.channel, threadTs, repoUrl, config, client, botUserId)
+  })
 
-    try {
-      const repoPath = await pullRepo(repoUrl, config.githubToken)
-      const answer = await runClaude(question, repoPath, config.timeoutMs)
-      const response = markdownToSlack(answer) || "No response from Claude."
+  app.message(async ({ message, client }) => {
+    if (message.subtype) return
+    if (!("thread_ts" in message) || !message.thread_ts) return
+    if (!("user" in message)) return
+    if (message.user === botUserId) return
 
-      await client.chat.update({
-        channel: event.channel,
-        ts: thinkingMsg.ts!,
-        text: response,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error("Error:", message)
+    const key = threadKey(message.channel, message.thread_ts)
+    if (!activeThreads.has(key)) return
 
-      await client.chat.update({
-        channel: event.channel,
-        ts: thinkingMsg.ts!,
-        text: `:x: Something went wrong: ${message}`,
-      })
+    const repoUrl = repoByChannel.get(message.channel)
+    if (!repoUrl) return
+
+    const question = (message.text ?? "").replace(/<@[A-Z0-9]+>/g, "").trim()
+    if (!question) return
+
+    console.log(`[bot] thread reply in ${message.channel}: "${question}"`)
+
+    if (!botUserId) {
+      const auth = await client.auth.test()
+      botUserId = auth.user_id as string
     }
+
+    await handleQuestion(question, message.channel, message.thread_ts, repoUrl, config, client, botUserId)
   })
 
   return app
