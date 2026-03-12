@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
+import { logger } from "./logger"
 
 const REPOS_DIR = "/tmp/repos"
 
@@ -44,10 +45,10 @@ export async function cloneRepo(repoUrl: string, token?: string): Promise<string
   const url = authenticatedUrl(repoUrl, token)
 
   if (existsSync(dir)) {
-    console.log(`[repos] ${dir} exists, pulling`)
+    logger.info({ dir }, "repo exists, pulling")
     await git(["pull", "--ff-only"], dir)
   } else {
-    console.log(`[repos] cloning ${repoUrl} → ${dir}`)
+    logger.info({ repoUrl, dir }, "cloning repo")
     await git(["clone", "--depth", "1", url, dir])
   }
 
@@ -59,7 +60,7 @@ export async function pullRepo(repoUrl: string, token?: string): Promise<string>
   const url = authenticatedUrl(repoUrl, token)
 
   if (!existsSync(dir)) {
-    console.log(`[repos] ${dir} missing, cloning`)
+    logger.info({ dir }, "repo missing, cloning")
     await git(["clone", "--depth", "1", url, dir])
   } else {
     await git(["pull", "--ff-only"], dir)

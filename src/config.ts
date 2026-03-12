@@ -23,7 +23,6 @@ export function loadConfig(): Config {
 
   if (missing.length) {
     console.error(`Missing required config: ${missing.join(", ")}`)
-    console.error("Copy .env.example to .env and fill in the values.")
     process.exit(1)
   }
 

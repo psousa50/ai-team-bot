@@ -4,6 +4,7 @@ import type { Config } from "./config"
 import { runClaude } from "./claude"
 import { markdownToSlack } from "./format"
 import { pullRepo } from "./repos"
+import { logger } from "./logger"
 
 const threadSessions = new Map<string, string>()
 
@@ -42,7 +43,7 @@ async function handleQuestion(
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error("Error:", message)
+    logger.error({ err }, "failed to handle question")
 
     await client.chat.update({
       channel,
@@ -73,7 +74,7 @@ export function createBot(config: Config): App {
     }
 
     const question = event.text.replace(/<@[A-Z0-9]+>/g, "").trim()
-    console.log(`[bot] mention in ${event.channel}: "${question}"`)
+    logger.info({ channel: event.channel, question }, "mention received")
 
     const repoUrl = repoByChannel.get(event.channel)
     if (!repoUrl) {
@@ -113,7 +114,7 @@ export function createBot(config: Config): App {
     const question = (message.text ?? "").replace(/<@[A-Z0-9]+>/g, "").trim()
     if (!question) return
 
-    console.log(`[bot] thread reply in ${message.channel}: "${question}"`)
+    logger.info({ channel: message.channel, question }, "thread reply received")
 
     if (!botUserId) {
       const auth = await client.auth.test()

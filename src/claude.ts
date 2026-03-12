@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { logger } from "./logger"
 
 export interface ClaudeResult {
   text: string
@@ -24,7 +25,7 @@ export async function runClaude(
       Object.entries(process.env).filter(([key]) => !sensitiveKeys.includes(key)),
     )
 
-    console.log(`[claude] starting query, cwd=${repoPath}${sessionId ? ` resume=${sessionId}` : ""}`)
+    logger.info({ cwd: repoPath, sessionId }, "starting claude query")
 
     for await (const message of query({
       prompt,
@@ -39,7 +40,7 @@ export async function runClaude(
       },
     })) {
       const subtype = "subtype" in message ? message.subtype : undefined
-      console.log(`[claude] ${message.type}${subtype ? `:${subtype}` : ""}`)
+      logger.debug({ type: message.type, subtype, message }, "claude message")
 
       if (message.type === "result") {
         if (message.subtype === "success") {
@@ -56,7 +57,7 @@ export async function runClaude(
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    console.log(`[claude] done in ${elapsed}s (${resultText.length} chars)`)
+    logger.info({ elapsed, chars: resultText.length, sessionId: resultSessionId }, "claude query done")
     return { text: resultText, sessionId: resultSessionId }
   } finally {
     clearTimeout(timer)
