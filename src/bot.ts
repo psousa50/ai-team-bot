@@ -5,31 +5,10 @@ import { runClaude } from "./claude"
 import { markdownToSlack } from "./format"
 import { pullRepo } from "./repos"
 
-const activeThreads = new Set<string>()
+const threadSessions = new Map<string, string>()
 
 function threadKey(channel: string, ts: string): string {
   return `${channel}:${ts}`
-}
-
-async function fetchThreadHistory(
-  client: WebClient,
-  channel: string,
-  threadTs: string,
-  botUserId: string,
-): Promise<string> {
-  const result = await client.conversations.replies({
-    channel,
-    ts: threadTs,
-  })
-
-  return (result.messages ?? [])
-    .slice(1)
-    .map((m) => {
-      const role = m.user === botUserId ? "assistant" : "user"
-      const text = (m.text ?? "").replace(/<@[A-Z0-9]+>/g, "").trim()
-      return `${role}: ${text}`
-    })
-    .join("\n")
 }
 
 async function handleQuestion(
@@ -39,9 +18,8 @@ async function handleQuestion(
   repoUrl: string,
   config: Config,
   client: WebClient,
-  botUserId: string,
 ) {
-  activeThreads.add(threadKey(channel, threadTs))
+  const key = threadKey(channel, threadTs)
 
   const thinkingMsg = await client.chat.postMessage({
     channel,
@@ -50,14 +28,12 @@ async function handleQuestion(
   })
 
   try {
-    const history = await fetchThreadHistory(client, channel, threadTs, botUserId)
-    const prompt = history
-      ? `Previous conversation:\n${history}\n\nNew message: ${question}`
-      : question
-
     const repoPath = await pullRepo(repoUrl, config.githubToken)
-    const answer = await runClaude(prompt, repoPath, config.timeoutMs)
-    const response = markdownToSlack(answer) || "No response from Claude."
+    const sessionId = threadSessions.get(key)
+    const result = await runClaude(question, repoPath, config.timeoutMs, sessionId)
+    const response = markdownToSlack(result.text) || "No response from Claude."
+
+    threadSessions.set(key, result.sessionId)
 
     await client.chat.update({
       channel,
@@ -119,7 +95,7 @@ export function createBot(config: Config): App {
     }
 
     const threadTs = event.thread_ts ?? event.ts
-    await handleQuestion(question, event.channel, threadTs, repoUrl, config, client, botUserId)
+    await handleQuestion(question, event.channel, threadTs, repoUrl, config, client)
   })
 
   app.message(async ({ message, client }) => {
@@ -129,7 +105,7 @@ export function createBot(config: Config): App {
     if (message.user === botUserId) return
 
     const key = threadKey(message.channel, message.thread_ts)
-    if (!activeThreads.has(key)) return
+    if (!threadSessions.has(key)) return
 
     const repoUrl = repoByChannel.get(message.channel)
     if (!repoUrl) return
@@ -144,7 +120,7 @@ export function createBot(config: Config): App {
       botUserId = auth.user_id as string
     }
 
-    await handleQuestion(question, message.channel, message.thread_ts, repoUrl, config, client, botUserId)
+    await handleQuestion(question, message.channel, message.thread_ts, repoUrl, config, client)
   })
 
   return app
