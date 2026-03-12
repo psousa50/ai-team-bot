@@ -15,6 +15,7 @@ function threadKey(channel: string, ts: string): string {
 async function handleQuestion(
   question: string,
   channel: string,
+  messageTs: string,
   threadTs: string,
   repoUrl: string,
   config: Config,
@@ -22,11 +23,7 @@ async function handleQuestion(
 ) {
   const key = threadKey(channel, threadTs)
 
-  const thinkingMsg = await client.chat.postMessage({
-    channel,
-    thread_ts: threadTs,
-    text: ":hourglass_flowing_sand: Thinking...",
-  })
+  await client.reactions.add({ channel, timestamp: messageTs, name: "hourglass_flowing_sand" })
 
   try {
     const repoPath = await pullRepo(repoUrl, config.githubToken)
@@ -36,18 +33,16 @@ async function handleQuestion(
 
     threadSessions.set(key, result.sessionId)
 
-    await client.chat.update({
-      channel,
-      ts: thinkingMsg.ts!,
-      text: response,
-    })
+    await client.reactions.remove({ channel, timestamp: messageTs, name: "hourglass_flowing_sand" })
+    await client.chat.postMessage({ channel, thread_ts: threadTs, text: response })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     logger.error({ err }, "failed to handle question")
 
-    await client.chat.update({
+    await client.reactions.remove({ channel, timestamp: messageTs, name: "hourglass_flowing_sand" }).catch(() => {})
+    await client.chat.postMessage({
       channel,
-      ts: thinkingMsg.ts!,
+      thread_ts: threadTs,
       text: `:x: Something went wrong: ${message}`,
     })
   }
@@ -96,7 +91,7 @@ export function createBot(config: Config): App {
     }
 
     const threadTs = event.thread_ts ?? event.ts
-    await handleQuestion(question, event.channel, threadTs, repoUrl, config, client)
+    await handleQuestion(question, event.channel, event.ts, threadTs, repoUrl, config, client)
   })
 
   app.message(async ({ message, client }) => {
@@ -121,7 +116,7 @@ export function createBot(config: Config): App {
       botUserId = auth.user_id as string
     }
 
-    await handleQuestion(question, message.channel, message.thread_ts, repoUrl, config, client)
+    await handleQuestion(question, message.channel, message.ts, message.thread_ts, repoUrl, config, client)
   })
 
   return app
